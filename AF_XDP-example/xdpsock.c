@@ -78,6 +78,8 @@
 #define SCHED_PRI__DEFAULT	0
 #define STRERR_BUFSIZE          1024
 
+#define XSK_UMEM__MAX_FRAME_SIZE 65536
+
 typedef __u64 u64;
 typedef __u32 u32;
 typedef __u16 u16;
@@ -861,7 +863,7 @@ static inline u16 udp_csum(u32 saddr, u32 daddr, u32 len,
 #define UDP_PKT_DATA_SIZE	(UDP_PKT_SIZE - \
 				 (sizeof(struct udphdr) + PKTGEN_HDR_SIZE))
 
-static u8 pkt_data[XSK_UMEM__DEFAULT_FRAME_SIZE];
+static u8 pkt_data[XSK_UMEM__MAX_FRAME_SIZE];
 
 static void gen_eth_hdr_data(void)
 {
@@ -1210,6 +1212,8 @@ static void parse_command_line(int argc, char **argv)
 			break;
 		case 'f':
 			opt_xsk_frame_size = atoi(optarg);
+			if (opt_xsk_frame_size > sysconf(_SC_PAGESIZE))
+				opt_mmap_flags = MAP_HUGETLB;
 			break;
 		case 'm':
 			opt_need_wakeup = false;
@@ -1230,13 +1234,6 @@ static void parse_command_line(int argc, char **argv)
 			break;
 		case 's':
 			opt_pkt_size = atoi(optarg);
-			if (opt_pkt_size > (XSK_UMEM__DEFAULT_FRAME_SIZE) ||
-			    opt_pkt_size < MIN_PKT_SIZE) {
-				fprintf(stderr,
-					"ERROR: Invalid frame size %d\n",
-					opt_pkt_size);
-				usage(basename(argv[0]));
-			}
 			break;
 		case 'P':
 			opt_pkt_fill_pattern = strtol(optarg, NULL, 16);
@@ -1320,10 +1317,27 @@ static void parse_command_line(int argc, char **argv)
 		usage(basename(argv[0]));
 	}
 
+	if (opt_xsk_frame_size > XSK_UMEM__MAX_FRAME_SIZE) {
+		fprintf(stderr, "ERROR: --frame-size=%d exceeds maximum of %d\n",
+			opt_xsk_frame_size, XSK_UMEM__MAX_FRAME_SIZE);
+		usage(basename(argv[0]));
+	}
+
 	if ((opt_xsk_frame_size & (opt_xsk_frame_size - 1)) &&
 	    !opt_unaligned_chunks) {
-		fprintf(stderr, "--frame-size=%d is not a power of two\n",
+		fprintf(stderr, "ERROR: --frame-size=%d is not a power of two\n",
 			opt_xsk_frame_size);
+		usage(basename(argv[0]));
+	}
+
+	if (opt_pkt_size < MIN_PKT_SIZE) {
+		fprintf(stderr, "ERROR: --tx-pkt-size=%d less than minimum of %d\n",
+			opt_pkt_size, MIN_PKT_SIZE);
+		usage(basename(argv[0]));
+	}
+
+	if (PKT_SIZE > opt_xsk_frame_size) {
+		fprintf(stderr, "ERROR: --tx-pkt-size=%d too large for frame size\n", opt_pkt_size);
 		usage(basename(argv[0]));
 	}
 
